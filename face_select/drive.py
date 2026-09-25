@@ -91,39 +91,41 @@ class DriveClient:
             fileId=folder_id, fields="id, name, mimeType, owners(emailAddress)", supportsAllDrives=True
         ).execute()
 
-    def _walk_folders(self, root_id: str) -> tuple[list[str], list[str]]:
-        """root 아래 모든 폴더 ID와, 바로가기로 연결된 이미지 파일 ID를 모은다.
+    def _walk_folders(self, root_id: str) -> tuple[list[dict], list[str]]:
+        """root 아래를 폴더 하나씩 조회하며 모든 파일과, 바로가기로 연결된 파일 ID를 모은다.
 
-        공유 폴더는 흔히 다른 사람 폴더로의 '바로가기'로 구성되므로 폴더 바로가기도 따라 들어간다.
+        - 여러 폴더를 OR로 묶은 쿼리는 남의 공유 폴더에서 결과가 비는 경우가 있어,
+          폴더마다 `'<id>' in parents` 단일 조건으로만 조회한다.
+        - 공유 폴더는 흔히 다른 사람 폴더로의 '바로가기'로 구성되므로 폴더 바로가기도 따라 들어간다.
         """
-        folders, image_targets = [], []
+        files, file_targets = [], []
         seen, queue = {root_id}, [root_id]
-        n_shortcuts = 0
+        n_folders = n_shortcuts = 0
+        fields = ("nextPageToken, files(id, name, mimeType, fileExtension, md5Checksum, size, thumbnailLink, "
+                  "createdTime, imageMediaMetadata(time), shortcutDetails(targetId, targetMimeType))")
         while queue:
             parent = queue.pop()
-            folders.append(parent)
-            q = (f"'{parent}' in parents and trashed = false and "
-                 f"(mimeType = '{FOLDER_MIME}' or mimeType = '{SHORTCUT_MIME}')")
-            fields = "nextPageToken, files(id, mimeType, shortcutDetails(targetId, targetMimeType))"
-            for f in self._paged_list(q, fields):
+            n_folders += 1
+            for f in self._paged_list(f"'{parent}' in parents and trashed = false", fields):
                 if f["mimeType"] == SHORTCUT_MIME:
                     details = f.get("shortcutDetails") or {}
                     target, target_mime = details.get("targetId"), details.get("targetMimeType", "")
                     if not target:
                         continue
                     n_shortcuts += 1
-                    if target_mime.startswith("image/"):
-                        image_targets.append(target)
-                        continue
                     if target_mime != FOLDER_MIME:
+                        file_targets.append(target)
                         continue
-                else:
+                elif f["mimeType"] == FOLDER_MIME:
                     target = f["id"]
+                else:
+                    files.append(f)
+                    continue
                 if target not in seen:
                     seen.add(target)
                     queue.append(target)
-        self.last_walk = {"folders": len(folders), "shortcuts": n_shortcuts}
-        return folders, image_targets
+        self.last_walk.update(folders=n_folders, shortcuts=n_shortcuts)
+        return files, file_targets
 
     def _paged_list(self, q: str, fields: str) -> Iterator[dict]:
         token = None
@@ -142,41 +144,34 @@ class DriveClient:
     def list_photos(self, folder_id: str | None = None) -> Iterator[DrivePhoto]:
         """사진 파일을 순회한다. folder_id를 주면 하위 폴더와 폴더 바로가기까지 재귀적으로 검색.
 
-        폴더 모드에서는 모든 파일을 받아 종류별로 세고(self.last_walk["types"]),
-        사진으로 인식한 것만 돌려준다.
+        폴더 모드에서는 모든 파일을 종류별로 세고(self.last_walk["types"]), 사진으로 인식한 것만 돌려준다.
         """
-        image_targets: list[str] = []
         types: Counter[str] = Counter()
-        if folder_id:
-            folders, image_targets = self._walk_folders(folder_id)
-            base = f"trashed = false and mimeType != '{FOLDER_MIME}' and mimeType != '{SHORTCUT_MIME}'"
-            # 쿼리 길이 제한을 피하기 위해 폴더를 묶어서 조회
-            chunks = [folders[i:i + 30] for i in range(0, len(folders), 30)]
-            queries = [f"{base} and (" + " or ".join(f"'{p}' in parents" for p in c) + ")" for c in chunks]
-        else:
-            queries = ["mimeType contains 'image/' and trashed = false"]
         self.last_walk["types"] = types
+        if not folder_id:
+            for f in self._paged_list("mimeType contains 'image/' and trashed = false", LIST_FIELDS):
+                yield self._to_photo(f)
+            return
+
+        files, file_targets = self._walk_folders(folder_id)
+        fields = LIST_FIELDS[LIST_FIELDS.index("files(") + 6:-1]
+        for target in file_targets:
+            try:
+                files.append(self._retry(
+                    lambda: self.service.files().get(fileId=target, fields=fields, supportsAllDrives=True).execute()
+                ))
+            except HttpError:
+                types["(바로가기 원본에 접근 불가) [제외]"] += 1
         seen = set()
-        for q in queries:
-            for f in self._paged_list(q, LIST_FIELDS):
-                if f["id"] in seen:
-                    continue
-                seen.add(f["id"])
-                ext = (f.get("fileExtension") or f["name"].rsplit(".", 1)[-1]).lower()
-                is_photo = f["mimeType"].startswith("image/") or ext in PHOTO_EXTS
-                types[f"{f['mimeType']} (.{ext})" + ("" if is_photo else " [제외]")] += 1
-                if is_photo:
-                    yield self._to_photo(f)
-        for target in image_targets:
-            if target not in seen:
-                seen.add(target)
-                fields = LIST_FIELDS[LIST_FIELDS.index("files(") + 6:-1]
-                try:
-                    yield self._to_photo(self._retry(
-                        lambda: self.service.files().get(fileId=target, fields=fields, supportsAllDrives=True).execute()
-                    ))
-                except HttpError:
-                    continue  # 바로가기 원본에 접근 권한이 없는 경우
+        for f in files:
+            if f["id"] in seen:
+                continue
+            seen.add(f["id"])
+            ext = (f.get("fileExtension") or f["name"].rsplit(".", 1)[-1]).lower()
+            is_photo = f["mimeType"].startswith("image/") or ext in PHOTO_EXTS
+            types[f"{f['mimeType']} (.{ext})" + ("" if is_photo else " [제외]")] += 1
+            if is_photo:
+                yield self._to_photo(f)
 
     @staticmethod
     def _to_photo(f: dict) -> DrivePhoto:
