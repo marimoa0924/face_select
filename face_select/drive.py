@@ -186,21 +186,22 @@ class DriveClient:
             taken_time=meta.get("time"),
         )
 
-    def fetch_image_bytes(self, photo: DrivePhoto, max_side: int = 1600) -> bytes:
+    def fetch_image_bytes(self, photo: DrivePhoto, max_side: int = 1600) -> tuple[bytes, str]:
         """썸네일(JPEG, 긴 변 max_side px)을 우선 받아 전송량을 줄이고, 없으면 원본을 받는다.
 
         썸네일은 HEIC/RAW도 JPEG로 변환해 주므로 디코딩 문제도 함께 해결된다.
-        max_side <= 0 이면 항상 원본을 받는다.
+        max_side <= 0 이면 항상 원본을 받는다. 반환: (바이트, "thumb" | "original")
         """
         if max_side > 0 and photo.thumbnail_link:
             url = photo.thumbnail_link.rsplit("=s", 1)[0] + f"=s{max_side}"
             try:
                 r = self._retry(lambda: self.session.get(url, timeout=60))
-                if r.status_code == 200 and r.content:
-                    return r.content
+                # 권한 문제로 로그인 HTML 페이지가 200으로 오는 경우가 있어 이미지인지 확인
+                if r.status_code == 200 and r.content and r.headers.get("Content-Type", "").startswith("image/"):
+                    return r.content, "thumb"
             except Exception:
                 pass
-        return self.download_original(photo.id)
+        return self.download_original(photo.id), "original"
 
     def download_original(self, file_id: str) -> bytes:
         buf = io.BytesIO()

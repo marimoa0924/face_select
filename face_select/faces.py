@@ -53,14 +53,33 @@ def decode_image(data: bytes, max_side: int = 1600) -> np.ndarray:
     return np.asarray(img)[:, :, ::-1].copy()
 
 
+GPU_PROVIDERS = ["CUDAExecutionProvider", "DmlExecutionProvider"]  # NVIDIA CUDA, Windows DirectML(모든 GPU)
+
+
+def select_providers(use_gpu: bool) -> list[str]:
+    if not use_gpu:
+        return ["CPUExecutionProvider"]
+    import onnxruntime as ort
+
+    available = ort.get_available_providers()
+    gpu = [p for p in GPU_PROVIDERS if p in available]
+    if not gpu:
+        print("[경고] GPU 실행 장치를 찾지 못해 CPU로 실행합니다. "
+              "Windows라면: pip uninstall -y onnxruntime && pip install onnxruntime-directml")
+    return gpu + ["CPUExecutionProvider"]
+
+
 class FaceEngine:
     def __init__(self, model: str = "buffalo_l", det_size: int = 640, min_face_px: int = 40,
                  min_det_score: float = 0.5, use_gpu: bool = False):
         from insightface.app import FaceAnalysis
 
-        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if use_gpu else ["CPUExecutionProvider"]
+        providers = select_providers(use_gpu)
         self.app = FaceAnalysis(name=model, allowed_modules=["detection", "recognition"], providers=providers)
         self.app.prepare(ctx_id=0 if use_gpu else -1, det_size=(det_size, det_size))
+        if use_gpu:
+            used = self.app.models["detection"].session.get_providers()
+            print(f"얼굴 인식 실행 장치: {used[0]}")
         self.min_face_px = min_face_px
         self.min_det_score = min_det_score
 

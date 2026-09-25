@@ -14,6 +14,8 @@ import csv
 import queue
 import re
 import threading
+import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -100,7 +102,7 @@ def _list_local_photos(args):
     if not root.is_dir():
         raise SystemExit(f"폴더를 찾을 수 없습니다: {root}")
     print(f"로컬 폴더: {root.resolve()}")
-    return list(list_local_photos(root)), lambda photo: photo.path.read_bytes()
+    return list(list_local_photos(root)), lambda photo: (photo.path.read_bytes(), "local")
 
 
 def cmd_scan(args):
@@ -122,10 +124,12 @@ def cmd_scan(args):
 
     # 다운로드/파일 읽기(I/O)는 스레드 풀, 추론(CPU/GPU)은 메인 스레드에서 처리.
     def fetch(photo):
+        t0 = time.perf_counter()
         try:
-            return photo, fetch_bytes(photo), None
+            data, source = fetch_bytes(photo)
+            return photo, data, None, source, time.perf_counter() - t0
         except Exception as e:  # noqa: BLE001
-            return photo, None, e
+            return photo, None, e, "error", time.perf_counter() - t0
 
     results: queue.Queue = queue.Queue(maxsize=args.workers * 4)
 
@@ -136,9 +140,15 @@ def cmd_scan(args):
         results.put(None)
 
     threading.Thread(target=producer, daemon=True).start()
+    # 병목 파악용: 다운로드/분석 평균 시간과 썸네일 사용 비율을 진행 표시줄에 보여준다
+    t_fetch = t_infer = 0.0
+    sources: Counter[str] = Counter()
     with tqdm(total=len(photos), unit="장") as bar:
         while (item := results.get()) is not None:
-            photo, data, err = item
+            photo, data, err, source, dt = item
+            sources[source] += 1
+            t_fetch += dt
+            t0 = time.perf_counter()
             try:
                 if err:
                     raise err
@@ -146,7 +156,12 @@ def cmd_scan(args):
                 store.save_result(photo, faces)
             except Exception as e:  # noqa: BLE001
                 store.save_error(photo, repr(e))
+            t_infer += time.perf_counter() - t0
             bar.update()
+            n = bar.n
+            bar.set_postfix_str(
+                f"다운 {t_fetch / n:.1f}s/장(동시 {args.workers}) 분석 {t_infer / n:.2f}s/장 "
+                f"썸네일 {sources['thumb'] * 100 // n}% 오류 {sources['error']}", refresh=False)
     print("스캔 완료:", store.stats())
 
 
