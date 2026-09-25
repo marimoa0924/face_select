@@ -1,7 +1,7 @@
 """명령행 진입점.
 
     python -m face_select enroll                     # reference/ 사진으로 내 얼굴 등록
-    python -m face_select scan [--folder ID]         # 드라이브 사진 스캔(재개 가능)
+    python -m face_select scan [--folder URL|ID]     # 드라이브 사진 스캔(재개 가능)
     python -m face_select report [--threshold 0.4]   # 매칭 결과 CSV 출력
     python -m face_select export [--threshold 0.4]   # 드라이브에 '내 사진' 폴더 + 바로가기 생성
 """
@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import csv
 import queue
+import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -20,6 +21,12 @@ from tqdm import tqdm
 from .store import Store
 
 REF_PATH = "reference_embeddings.npy"
+
+
+def folder_id(value: str) -> str:
+    """폴더 ID 또는 드라이브 폴더 URL(모바일/공유 링크 포함)에서 ID를 뽑는다."""
+    m = re.search(r"/folders/([\w-]+)", value) or re.search(r"[?&]id=([\w-]+)", value)
+    return m.group(1) if m else value
 
 
 def cmd_enroll(args):
@@ -133,7 +140,8 @@ def main(argv=None):
     s.set_defaults(func=cmd_enroll)
 
     s = sub.add_parser("scan", help="드라이브 사진의 얼굴을 검출해 캐시에 저장")
-    s.add_argument("--folder", help="이 폴더 ID 하위만 스캔 (생략 시 드라이브 전체)")
+    s.add_argument("--folder", type=folder_id,
+                   help="이 폴더(ID 또는 공유 링크) 하위만 스캔 (생략 시 드라이브 전체)")
     s.add_argument("--size", type=int, default=1600, help="분석 해상도(긴 변 px). 0이면 원본 다운로드")
     s.add_argument("--min-face", type=int, default=40, help="이보다 작은 얼굴(px)은 무시")
     s.add_argument("--workers", type=int, default=8, help="동시 다운로드 수")

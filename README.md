@@ -81,7 +81,8 @@ python -m face_select export --threshold 0.42   # ④ 드라이브에 결과 폴
 ```
 
 자주 쓰는 옵션:
-- `scan --folder <폴더ID>`: 특정 폴더(하위 폴더 포함)만 스캔. 폴더 ID는 드라이브 URL의 `folders/` 뒤 문자열
+- `scan --folder <폴더 링크 또는 ID>`: 특정 폴더(하위 폴더 포함)만 스캔. 드라이브 공유 링크를 그대로 붙여 넣어도 됩니다.
+  남이 공유한 폴더도 내 계정으로 볼 수 있으면 스캔할 수 있고, 결과 바로가기는 **내 드라이브**에 만들어집니다(원본 폴더는 건드리지 않음).
 - `scan --workers 16`: 동시 다운로드 수 증가
 - `--gpu`: NVIDIA GPU 사용 (`pip install onnxruntime-gpu` 필요)
 
