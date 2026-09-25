@@ -60,6 +60,16 @@
 
 ### 3-1. 준비
 1. Python 3.10+ 설치 후:
+
+   **Windows (PowerShell)** — 한 줄씩 실행
+   ```powershell
+   python -m venv .venv
+   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass   # 활성화 스크립트 실행 허용(현재 창에서만)
+   .\.venv\Scripts\Activate.ps1
+   pip install -r requirements.txt
+   ```
+
+   **macOS / Linux**
    ```bash
    python -m venv .venv && source .venv/bin/activate
    pip install -r requirements.txt
