@@ -65,7 +65,7 @@ def select_providers(use_gpu: bool) -> list[str]:
     gpu = [p for p in GPU_PROVIDERS if p in available]
     if not gpu:
         print("[경고] GPU 실행 장치를 찾지 못해 CPU로 실행합니다. "
-              "Windows라면: pip uninstall -y onnxruntime && pip install onnxruntime-directml")
+              "Windows라면: pip uninstall -y onnxruntime; pip install onnxruntime-directml")
     return gpu + ["CPUExecutionProvider"]
 
 
