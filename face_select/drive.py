@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import glob
 import io
 import os
 import time
@@ -39,6 +40,21 @@ class DrivePhoto:
     taken_time: str | None
 
 
+def _missing_credentials_message(path: str) -> str:
+    here = os.path.abspath(os.path.dirname(path) or ".")
+    lines = [f"'{path}' 파일을 찾을 수 없습니다.", f"  찾은 위치: {here}"]
+    # 흔한 실수: 확장자 숨김으로 생긴 이중 확장자, 이름을 안 바꾼 원본, 다운로드 폴더에 남아 있는 파일
+    patterns = ["credentials.json.*", "credentials*.txt", "client_secret*.json",
+                os.path.join(os.path.expanduser("~"), "Downloads", "client_secret*.json")]
+    found = sorted({os.path.abspath(f) for pat in patterns for f in glob.glob(pat)})
+    if found:
+        lines.append("  비슷한 파일을 찾았습니다. 이 폴더로 옮기고 이름을 credentials.json 으로 바꿔 주세요:")
+        lines += [f"    - {f}" for f in found]
+    else:
+        lines.append("  구글 클라우드 콘솔에서 받은 OAuth 클라이언트 JSON을 이 폴더에 credentials.json 으로 저장해 주세요.")
+    return "\n".join(lines)
+
+
 def authenticate(credentials_path: str = "credentials.json", token_path: str = "token.json") -> Credentials:
     creds = None
     if os.path.exists(token_path):
@@ -47,6 +63,8 @@ def authenticate(credentials_path: str = "credentials.json", token_path: str = "
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
+            if not os.path.exists(credentials_path):
+                raise SystemExit(_missing_credentials_message(credentials_path))
             flow = InstalledAppFlow.from_client_secrets_file(credentials_path, SCOPES)
             creds = flow.run_local_server(port=0)
         with open(token_path, "w") as f:
