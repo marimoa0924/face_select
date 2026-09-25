@@ -168,6 +168,11 @@ def cmd_scan(args):
 def _matches(store: Store, threshold: float):
     from .faces import ReferenceSet
 
+    if not Path(REF_PATH).exists():
+        raise SystemExit(
+            f"내 얼굴 등록 파일({REF_PATH})이 이 폴더에 없습니다: {Path.cwd()}\n"
+            "  reference/ 폴더에 내 사진을 넣고 먼저 실행하세요: python -m face_select enroll"
+        )
     refs = ReferenceSet.load(REF_PATH)
     for pid, name, taken, embs in store.iter_photo_embeddings():
         score = max(refs.score(e) for e in embs)
