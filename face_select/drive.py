@@ -77,6 +77,15 @@ class DriveClient:
         self.service = build("drive", "v3", credentials=creds, cache_discovery=False)
         self.session = AuthorizedSession(creds)
 
+    def whoami(self) -> str:
+        return self.service.about().get(fields="user(emailAddress)").execute()["user"]["emailAddress"]
+
+    def folder_info(self, folder_id: str) -> dict:
+        """폴더 메타데이터. 접근할 수 없으면 HttpError(404/403)."""
+        return self.service.files().get(
+            fileId=folder_id, fields="id, name, mimeType, owners(emailAddress)", supportsAllDrives=True
+        ).execute()
+
     def _folder_ids_recursive(self, root_id: str) -> list[str]:
         ids, queue = [root_id], [root_id]
         while queue:

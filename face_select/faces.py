@@ -30,7 +30,7 @@ def decode_image(data: bytes, max_side: int = 1600) -> np.ndarray:
     """바이트 → EXIF 회전 보정된 BGR ndarray (InsightFace 입력 형식)."""
     img = Image.open(io.BytesIO(data))
     img = ImageOps.exif_transpose(img).convert("RGB")
-    if max(img.size) > max_side:
+    if max_side > 0 and max(img.size) > max_side:
         img.thumbnail((max_side, max_side))
     return np.asarray(img)[:, :, ::-1].copy()
 

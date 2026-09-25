@@ -96,7 +96,21 @@ python -m face_select export --threshold 0.42   # ④ 드라이브에 결과 폴
 - `scan --workers 16`: 동시 다운로드 수 증가
 - `--gpu`: NVIDIA GPU 사용 (`pip install onnxruntime-gpu` 필요)
 
-### 3-3. 임계값 튜닝 팁
+### 3-3. 공유 폴더가 "찾은 사진: 0장"으로 나올 때
+`scan`은 먼저 **로그인한 계정**과 **대상 폴더 이름/소유자**를 출력합니다.
+
+- **"폴더에 접근할 수 없습니다"**: 로그인한 계정이 폴더 권한이 없는 계정입니다. `token.json`을 지우고 다시 실행해 올바른 계정으로 로그인하세요.
+- **"사진 목록이 비어 있습니다"**: '링크가 있는 모든 사용자'로만 공유된 폴더는 드라이브 API가 안의 파일 목록을 주지 않을 수 있습니다. 둘 중 하나로 해결합니다.
+  1. 폴더 소유자에게 내 계정을 **직접 공유 대상**으로 추가해 달라고 요청
+  2. 드라이브 웹에서 폴더를 **다운로드**(zip)하고 압축을 푼 뒤 로컬 모드로 분석:
+     ```powershell
+     python -m face_select scan --local "C:\Users\me\Downloads\사진폴더"
+     python -m face_select report
+     python -m face_select export          # 매칭된 사진을 output\my_photos 로 복사
+     ```
+     (`export --copy-to 경로`로 복사 위치 변경, `--skip-drive`로 드라이브 바로가기 생략)
+
+### 3-4. 임계값 튜닝 팁
 1. 200~500장 정도로 먼저 `scan` → `report` 실행
 2. CSV를 `score` 순으로 보며 처음으로 남의 얼굴이 섞이기 시작하는 지점을 찾음
 3. 그보다 약간 높게 `--threshold`를 잡음. 놓치는 사진이 많으면 `reference/`에 그런 사진(옆모습, 어릴 때 등)을 추가하고 `enroll` → `report`만 다시 실행
