@@ -64,9 +64,12 @@ def _list_drive_photos(args):
 
     print("드라이브에서 사진 목록을 가져오는 중...")
     photos = list(drive.list_photos(args.folder))
+    if args.folder:
+        w = drive.last_walk
+        print(f"탐색한 폴더: {w['folders']}개 (따라간 바로가기: {w['shortcuts']}개)")
     if args.folder and not photos:
         raise SystemExit(
-            "폴더에는 접근할 수 있지만 사진 목록이 비어 있습니다.\n"
+            "폴더에는 접근할 수 있지만 하위 폴더/바로가기를 모두 살펴봐도 사진이 없습니다.\n"
             "  '링크가 있는 모든 사용자'로만 공유된 폴더는 드라이브 API가 안의 파일 목록을 돌려주지 않을 수 있습니다.\n"
             "  해결 방법 (둘 중 하나):\n"
             f"   1) 폴더 소유자에게 내 계정({account})을 직접 공유 대상으로 추가해 달라고 요청\n"

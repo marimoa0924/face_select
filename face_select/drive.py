@@ -76,6 +76,7 @@ class DriveClient:
     def __init__(self, creds: Credentials):
         self.service = build("drive", "v3", credentials=creds, cache_discovery=False)
         self.session = AuthorizedSession(creds)
+        self.last_walk: dict[str, int] = {}
 
     def whoami(self) -> str:
         return self.service.about().get(fields="user(emailAddress)").execute()["user"]["emailAddress"]
@@ -86,15 +87,39 @@ class DriveClient:
             fileId=folder_id, fields="id, name, mimeType, owners(emailAddress)", supportsAllDrives=True
         ).execute()
 
-    def _folder_ids_recursive(self, root_id: str) -> list[str]:
-        ids, queue = [root_id], [root_id]
+    def _walk_folders(self, root_id: str) -> tuple[list[str], list[str]]:
+        """root 아래 모든 폴더 ID와, 바로가기로 연결된 이미지 파일 ID를 모은다.
+
+        공유 폴더는 흔히 다른 사람 폴더로의 '바로가기'로 구성되므로 폴더 바로가기도 따라 들어간다.
+        """
+        folders, image_targets = [], []
+        seen, queue = {root_id}, [root_id]
+        n_shortcuts = 0
         while queue:
             parent = queue.pop()
-            q = f"'{parent}' in parents and mimeType = '{FOLDER_MIME}' and trashed = false"
-            for f in self._paged_list(q, "nextPageToken, files(id)"):
-                ids.append(f["id"])
-                queue.append(f["id"])
-        return ids
+            folders.append(parent)
+            q = (f"'{parent}' in parents and trashed = false and "
+                 f"(mimeType = '{FOLDER_MIME}' or mimeType = '{SHORTCUT_MIME}')")
+            fields = "nextPageToken, files(id, mimeType, shortcutDetails(targetId, targetMimeType))"
+            for f in self._paged_list(q, fields):
+                if f["mimeType"] == SHORTCUT_MIME:
+                    details = f.get("shortcutDetails") or {}
+                    target, target_mime = details.get("targetId"), details.get("targetMimeType", "")
+                    if not target:
+                        continue
+                    n_shortcuts += 1
+                    if target_mime.startswith("image/"):
+                        image_targets.append(target)
+                        continue
+                    if target_mime != FOLDER_MIME:
+                        continue
+                else:
+                    target = f["id"]
+                if target not in seen:
+                    seen.add(target)
+                    queue.append(target)
+        self.last_walk = {"folders": len(folders), "shortcuts": n_shortcuts}
+        return folders, image_targets
 
     def _paged_list(self, q: str, fields: str) -> Iterator[dict]:
         token = None
@@ -111,27 +136,45 @@ class DriveClient:
                 return
 
     def list_photos(self, folder_id: str | None = None) -> Iterator[DrivePhoto]:
-        """이미지 파일을 순회한다. folder_id를 주면 그 하위 폴더까지 재귀적으로 검색."""
+        """이미지 파일을 순회한다. folder_id를 주면 하위 폴더와 폴더 바로가기까지 재귀적으로 검색."""
         base = "mimeType contains 'image/' and trashed = false"
+        image_targets: list[str] = []
         if folder_id:
-            folders = self._folder_ids_recursive(folder_id)
+            folders, image_targets = self._walk_folders(folder_id)
             # 쿼리 길이 제한을 피하기 위해 폴더를 묶어서 조회
             chunks = [folders[i:i + 30] for i in range(0, len(folders), 30)]
             queries = [f"{base} and (" + " or ".join(f"'{p}' in parents" for p in c) + ")" for c in chunks]
         else:
             queries = [base]
+        seen = set()
         for q in queries:
             for f in self._paged_list(q, LIST_FIELDS):
-                meta = f.get("imageMediaMetadata") or {}
-                yield DrivePhoto(
-                    id=f["id"],
-                    name=f["name"],
-                    mime_type=f["mimeType"],
-                    md5=f.get("md5Checksum"),
-                    thumbnail_link=f.get("thumbnailLink"),
-                    created_time=f.get("createdTime"),
-                    taken_time=meta.get("time"),
-                )
+                if f["id"] not in seen:
+                    seen.add(f["id"])
+                    yield self._to_photo(f)
+        for target in image_targets:
+            if target not in seen:
+                seen.add(target)
+                fields = LIST_FIELDS[LIST_FIELDS.index("files(") + 6:-1]
+                try:
+                    yield self._to_photo(self._retry(
+                        lambda: self.service.files().get(fileId=target, fields=fields, supportsAllDrives=True).execute()
+                    ))
+                except HttpError:
+                    continue  # 바로가기 원본에 접근 권한이 없는 경우
+
+    @staticmethod
+    def _to_photo(f: dict) -> DrivePhoto:
+        meta = f.get("imageMediaMetadata") or {}
+        return DrivePhoto(
+            id=f["id"],
+            name=f["name"],
+            mime_type=f["mimeType"],
+            md5=f.get("md5Checksum"),
+            thumbnail_link=f.get("thumbnailLink"),
+            created_time=f.get("createdTime"),
+            taken_time=meta.get("time"),
+        )
 
     def fetch_image_bytes(self, photo: DrivePhoto, max_side: int = 1600) -> bytes:
         """썸네일(JPEG, 긴 변 max_side px)을 우선 받아 전송량을 줄이고, 없으면 원본을 받는다.
