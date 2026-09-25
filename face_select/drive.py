@@ -6,6 +6,7 @@ import glob
 import io
 import os
 import time
+from collections import Counter
 from dataclasses import dataclass
 from typing import Iterator
 
@@ -23,8 +24,11 @@ SCOPES = [
 ]
 FOLDER_MIME = "application/vnd.google-apps.folder"
 SHORTCUT_MIME = "application/vnd.google-apps.shortcut"
+# mimeType이 image/* 가 아니어도(예: RAW가 application/octet-stream 으로 올라간 경우) 확장자로 사진을 인식
+PHOTO_EXTS = {"jpg", "jpeg", "png", "webp", "heic", "heif", "bmp", "tif", "tiff",
+              "cr2", "cr3", "arw", "nef", "dng", "raf", "orf", "rw2"}
 LIST_FIELDS = (
-    "nextPageToken, files(id, name, mimeType, md5Checksum, size, "
+    "nextPageToken, files(id, name, mimeType, fileExtension, md5Checksum, size, "
     "thumbnailLink, createdTime, parents, imageMediaMetadata(width, height, time))"
 )
 
@@ -136,21 +140,32 @@ class DriveClient:
                 return
 
     def list_photos(self, folder_id: str | None = None) -> Iterator[DrivePhoto]:
-        """이미지 파일을 순회한다. folder_id를 주면 하위 폴더와 폴더 바로가기까지 재귀적으로 검색."""
-        base = "mimeType contains 'image/' and trashed = false"
+        """사진 파일을 순회한다. folder_id를 주면 하위 폴더와 폴더 바로가기까지 재귀적으로 검색.
+
+        폴더 모드에서는 모든 파일을 받아 종류별로 세고(self.last_walk["types"]),
+        사진으로 인식한 것만 돌려준다.
+        """
         image_targets: list[str] = []
+        types: Counter[str] = Counter()
         if folder_id:
             folders, image_targets = self._walk_folders(folder_id)
+            base = f"trashed = false and mimeType != '{FOLDER_MIME}' and mimeType != '{SHORTCUT_MIME}'"
             # 쿼리 길이 제한을 피하기 위해 폴더를 묶어서 조회
             chunks = [folders[i:i + 30] for i in range(0, len(folders), 30)]
             queries = [f"{base} and (" + " or ".join(f"'{p}' in parents" for p in c) + ")" for c in chunks]
         else:
-            queries = [base]
+            queries = ["mimeType contains 'image/' and trashed = false"]
+        self.last_walk["types"] = types
         seen = set()
         for q in queries:
             for f in self._paged_list(q, LIST_FIELDS):
-                if f["id"] not in seen:
-                    seen.add(f["id"])
+                if f["id"] in seen:
+                    continue
+                seen.add(f["id"])
+                ext = (f.get("fileExtension") or f["name"].rsplit(".", 1)[-1]).lower()
+                is_photo = f["mimeType"].startswith("image/") or ext in PHOTO_EXTS
+                types[f"{f['mimeType']} (.{ext})" + ("" if is_photo else " [제외]")] += 1
+                if is_photo:
                     yield self._to_photo(f)
         for target in image_targets:
             if target not in seen:

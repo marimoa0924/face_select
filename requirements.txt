@@ -8,3 +8,4 @@ numpy>=1.24
 pillow>=10.0
 pillow-heif>=0.13
 tqdm>=4.66
+rawpy>=0.19

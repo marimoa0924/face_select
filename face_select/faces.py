@@ -16,7 +16,8 @@ try:
 except ImportError:  # HEIC 원본을 직접 받을 때만 필요
     pass
 
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".bmp"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".bmp", ".tif", ".tiff",
+              ".cr2", ".cr3", ".arw", ".nef", ".dng", ".raf", ".orf", ".rw2"}
 
 
 @dataclass
@@ -26,9 +27,26 @@ class DetectedFace:
     embedding: np.ndarray  # L2 정규화된 512차원 벡터
 
 
+def _open_raw(data: bytes) -> Image.Image:
+    """카메라 RAW(.CR3/.ARW/.NEF 등): 내장 미리보기 JPEG를 쓰고, 없으면 현상한다."""
+    import rawpy
+
+    with rawpy.imread(io.BytesIO(data)) as raw:
+        try:
+            thumb = raw.extract_thumb()
+            if thumb.format == rawpy.ThumbFormat.JPEG:
+                return Image.open(io.BytesIO(thumb.data))
+        except (rawpy.LibRawNoThumbnailError, rawpy.LibRawUnsupportedThumbnailError):
+            pass
+        return Image.fromarray(raw.postprocess(half_size=True))
+
+
 def decode_image(data: bytes, max_side: int = 1600) -> np.ndarray:
     """바이트 → EXIF 회전 보정된 BGR ndarray (InsightFace 입력 형식)."""
-    img = Image.open(io.BytesIO(data))
+    try:
+        img = Image.open(io.BytesIO(data))
+    except Exception:
+        img = _open_raw(data)
     img = ImageOps.exif_transpose(img).convert("RGB")
     if max_side > 0 and max(img.size) > max_side:
         img.thumbnail((max_side, max_side))
